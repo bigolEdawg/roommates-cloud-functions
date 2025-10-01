@@ -32,26 +32,6 @@ var firestoreClient *firestore.Client
 	- Chore status (not started, in progress, completed, overdue)
  */
 
-
-// func createChore(ctx context.Context, docID string, userID string) error{
-// 	choreRef := firestoreClient.Collection("groups").Doc(docID).Collection("chores").Doc(docID)
-
-// 	groupEntry := map[string]interface{} {
-// 		"created_by" : userID,
-// 	}
-
-// 	_, err := choreRef.Set(ctx, groupEntry, firestore.MergeAll)
-
-// 	if err != nil {
-// 		log.Printf("failed to save group data to group %s", docID)
-// 		return fmt.Errorf("failed to create group for user_id %s", userID)
-// 	}
-	
-// 	log.Printf("Successfully set group %s profile", docID)
-// 	return nil
-// }
-
-
 // save the group to firstore with inital user id 
 func saveChoreToFirestore(ctx context.Context, client *firestore.Client, groupID string, choreInfo map[string]interface{}) (string, error) {
 	choreRef := client.Collection("groups").Doc(groupID).Collection("chores")
@@ -114,6 +94,8 @@ func AddChoreHandler(w http.ResponseWriter, r *http.Request) {
 		"chore_frequency"	: RequestBody.ChoreFrequency,
 		"chore_assignee"	: RequestBody.ChoreAssignee,
 		"created_by"		: RequestBody.UserID,
+		"chore_status"		: "not started",
+		"completed_at"		: "NA",
 	}
 
 
@@ -122,13 +104,7 @@ func AddChoreHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Error creating group id: %v", err), http.StatusInternalServerError)
 		return
 	}
-	// later i need to add a validation to check if the user id is a string or not
-	// err = createChore(ctx, docID, RequestBody.UserID)
 
-	// if err != nil {
-	// 	http.Error(w, fmt.Sprintf("Error saving user id %s to group: %v", RequestBody.UserID, err), http.StatusInternalServerError)
-	// 	return
-	// }
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `{"message": "Group %s created successfully"}`, docID)
 }
