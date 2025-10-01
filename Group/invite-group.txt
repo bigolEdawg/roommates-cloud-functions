@@ -1,0 +1,353 @@
+package group
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"encoding/json"
+	"fmt"
+	// "os"
+	// "strings"
+
+	"cloud.google.com/go/firestore"
+	// "github.com/GoogleCloudPlatform/functions-framework-go/functions"
+)
+
+// func createMember(ctx context.Context, groupID string, inviteeID string) error{
+// 	groupRef := firestoreClient.Collection("groups").Doc(groupID).Collection("members").Doc(inviteeID)
+
+// 	_, err := groupRef.Set(ctx, )
+// }
+
+
+
+
+func invite(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
+	var requestBody struct {
+		GroupID		string `json:"group_id"`
+		Invitee		string `json:"invitee"`
+		UserID		string `json:"user_id"`
+	}
+
+	// Parse the incoming JSON body
+	if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+		log.Printf("Failed to parse request body: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to parse request body: %v", err), http.StatusBadRequest)
+		return fmt.Errorf("error parsing request body: %v", err)
+	}
+
+	// Ensure the Invitee is provided
+	if requestBody.Invitee == "" {
+		log.Printf("Missing required field: invitee")
+		http.Error(w, "Missing required field: invitee", http.StatusBadRequest)
+		return fmt.Errorf("invitee is required")
+	}
+ 
+	// Check if the Invitee is already in the group contest
+	groupRef := firestoreClient.Collection("groups").Doc(requestBody.GroupID).Collection("members")
+	query := groupRef.Where("user_id", "==", requestBody.Invitee).Limit(1)
+
+	docs, err := query.Documents(ctx).GetAll()
+	if err != nil {
+		log.Printf("Failed to query Firestore: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to query Firestore: %v", err), http.StatusInternalServerError)
+		return fmt.Errorf("error querying Firestore: %v", err)
+	}
+
+	if len(docs) > 0 {
+		// Invitee is already in the group
+		log.Printf("Invitee %s is already in the group", requestBody.Invitee)
+		http.Error(w, fmt.Sprintf("Invitee %s is already in the group", requestBody.Invitee), http.StatusBadRequest)
+		return fmt.Errorf("invitee already in group")
+	}
+
+	// Invitee isn't in the group, proceed with the invite
+	inviteRef := firestoreClient.Collection("users").Doc(requestBody.Invitee).Collection("group_invites").Doc(requestBody.GroupID)
+
+	// Save the invitation
+	log.Printf("Saving invite for user %s to group %s", requestBody.Invitee, requestBody.GroupID)
+	_, err = inviteRef.Set(ctx, map[string]interface{}{
+		"group_id":		requestBody.GroupID,
+		"status":		"pending",
+		"sent_at":		firestore.ServerTimestamp,
+		"sent_from":	requestBody.UserID,
+	})
+
+	if err != nil {
+		log.Printf("Failed to save invite: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to save invite: %v", err), http.StatusInternalServerError)
+		return fmt.Errorf("error saving invite to Firestore: %v", err)
+	}
+
+	// Respond with success
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":  "Invite sent successfully",
+		"group_id": requestBody.GroupID,
+	})
+
+	return nil
+}
+
+
+// accept an invintation
+func acceptGroupInvite(ctx context.Context, w http.ResponseWriter, r *http.Request) (error){	
+	var requestBody struct {
+		UserID		string	`json:"user_id"`
+		GroupID		string	`json:"group_id"`
+		Accepted		bool	`json:"accepted"`
+		// TrackID			string	`json:"track_id"`
+	}
+	
+	defer r.Body.Close()
+    // Get the post request
+    if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+        http.Error(w, fmt.Sprintf("Failed to parse request body: %v", err), http.StatusBadRequest)
+        return err
+    }
+
+	var message string
+	if requestBody.Accepted {
+		// edit groups status
+		// _, err := editstatus(ctx, w, r, requestBody.GroupID, "active")
+		// if err != nil {
+		// 	log.Printf("error failed to update status %v", err)
+		// 	return fmt.Errorf("error failed to update status %v", err)
+		// }
+
+		// trackID := requestBody.TrackID
+		// if trackID == "" {
+		// 	log.Printf("error track required")
+		// 	return fmt.Errorf("error track required")
+		// }
+
+		err := member(ctx, requestBody.UserID, requestBody.GroupID)
+		if err != nil {
+			log.Printf("error saving User %s to groups %s: %v", requestBody.UserID, requestBody.GroupID, err)
+			return fmt.Errorf("error saving User %s to groups %s: %v", requestBody.UserID, requestBody.GroupID, err)
+		}
+
+		// update total_entries in firestore
+		groupRef := firestoreClient.Collection("groups").Doc(requestBody.GroupID)
+		_, err = groupRef.Update(ctx, []firestore.Update{
+			{Path: "total_entries", Value: firestore.Increment(1)},
+		})
+	
+		if err != nil {
+			log.Printf("Failed to update total_entries: %v", err)
+			http.Error(w, fmt.Sprintf("Failed to update total_entries: %v", err), http.StatusInternalServerError)
+			return fmt.Errorf("error updating total_entries%v",err)
+		}
+		// After the User makes their decision we can remove the invite
+		_, err = firestoreClient.Collection("users").Doc(requestBody.UserID).Collection("user_invites").Doc(requestBody.GroupID).Delete(ctx)
+
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to remove invte to groups %s: %v", requestBody.GroupID, err), http.StatusInternalServerError)
+			return err
+		}
+	
+		if err := saveGroupIDToUserCollection(ctx, firestoreClient, requestBody.UserID, requestBody.GroupID); err != nil {
+			http.Error(w, fmt.Sprintf("Failed to save to groups %s for user: %v", requestBody.GroupID, err), http.StatusInternalServerError)
+			return err
+		}
+		message = "accepted"
+		//fmt.Sprintf("set the status %s", status)
+	} else {
+		message = "rejected"
+	}
+	
+	// Respond with success
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":  fmt.Sprintf("User %s %s groups %s successfully",requestBody.UserID, message, requestBody.GroupID),
+		"group_id": requestBody.GroupID,
+	})
+
+
+	log.Printf("User %s has %s groups %s", requestBody.UserID, message, requestBody.GroupID)
+	return nil
+}
+
+
+// ------------------------------ Save Versus to User --------------------------------
+// Saves the groups ID in the User's "my_groups" subcollection
+func saveGroupIDToUserCollection(ctx context.Context, client *firestore.Client, UserID, GroupID string) error {
+	// Reference to the user's "Myuser" subcollection with GroupID as the document ID
+	UserRef := client.Collection("users").Doc(UserID).Collection("my_groups").Doc(GroupID)
+	GroupID = fmt.Sprintf("/groups/%s", GroupID)
+
+	_, err := UserRef.Set(ctx, map[string]interface{}{
+		"group_id": GroupID,
+		"timestamp": firestore.ServerTimestamp,
+	})
+	if err != nil {
+		log.Printf("failed to add groups %s for User %s: %v", GroupID, UserID, err)
+		return fmt.Errorf("failed to add groups %s for User %s: %v", GroupID, UserID, err)
+	}
+	return nil
+}
+
+
+// edit the satus of the competition
+// status can either be 'draft', 'active', or 'closed' 
+// func editstatus(ctx context.Context, w http.ResponseWriter, r *http.Request, GroupID string, status string) (string, error) {
+//     if GroupID == "" || status == "" {
+//         // Only try to read r.Body if GroupID and status were not provided (i.e., called from HTTP)
+//         var requestBody struct {
+//             GroupID string `json:"group_id"`
+//             Status   string `json:"status"`
+//         }
+
+// 		defer r.Body.Close()
+//         if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+// 			log.Printf("Failed to parse request body")
+//             http.Error(w, "Failed to parse request body", http.StatusBadRequest)
+//             return "", fmt.Errorf("error parsing status request body")
+//         }
+//         GroupID = requestBody.GroupID
+//         status = requestBody.Status
+//     }
+
+//     if GroupID == "" || status == "" {
+// 		log.Printf("Missing required fields: group_id or status")
+//         http.Error(w, "Missing required fields: group_id or status", http.StatusBadRequest)
+//         return "", fmt.Errorf("missing required fields")
+//     }
+
+//     allowedStatuses := map[string]bool{
+//         "draft":  true,
+//         "active": true,
+//         "closed": true,
+//     }
+
+//     if !allowedStatuses[status] {
+//         log.Printf("Invalid status update attempt: %s", status)
+//         return "", fmt.Errorf("invalid status: %s", status)
+//     }
+
+//     log.Printf("Updating groups status for %s to %s", GroupID, status)
+//     groupRef := firestoreClient.Collection("groups").Doc(GroupID)
+//     _, err := groupRef.Update(ctx, []firestore.Update{
+//         {Path: "status", Value: status},
+//     })
+
+//     if err != nil {
+//         http.Error(w, fmt.Sprintf("Failed to update status: %v", err), http.StatusInternalServerError)
+//         return "", err
+//     }
+
+//     w.Header().Set("Content-Type", "application/json")
+//     json.NewEncoder(w).Encode(map[string]string{
+//         "message":   "groups status updated successfully",
+//         "group_id": GroupID,
+//     })
+
+//     return "Status updated successfully", nil
+// }
+
+func member(ctx context.Context, UserID, GroupID string) (error){
+	UserRef := firestoreClient.Collection("users").Doc(UserID)
+	UserDoc, err :=  UserRef.Get(ctx)
+	if err != nil {
+		log.Printf("failed to fetch User data for User %s: %v", UserID, err)
+		return fmt.Errorf("failed to fetch User data for User %s: %v", UserID, err)
+	}
+	
+	UserData := UserDoc.Data()
+	UserName, UserNameExist := UserData["user_name"].(string)
+
+	if !UserNameExist {
+		log.Printf("Username not found for UserID: %s", UserID)
+		return fmt.Errorf("username not found for UserID: %s", UserID)
+	}
+
+
+	// Save the member
+	contestRef := firestoreClient.Collection("groups").Doc(GroupID).Collection("members").Doc(UserID)
+	GroupID = fmt.Sprintf("/groups/%s", GroupID)
+
+	// Use Set() to add the groups ID and timestamp
+	_, err = contestRef.Set(ctx, map[string]interface{}{
+		"user_id":			UserID,
+		"user_name":		UserName,
+	})
+
+	if err != nil {
+		log.Printf("failed to add member %s to groups %s: %v", UserID, GroupID, err)
+		return fmt.Errorf("failed to add member %s to groups %s: %v", UserID, GroupID, err)
+	}
+
+	log.Printf("Successfully added member %s to groups %s", UserID, GroupID)
+	return nil
+}
+
+
+
+
+// Adds an User to the groups, ensuring entry limits are respected
+// func member(ctx context.Context, UserID, GroupID string) (error){
+	// Fetch the groups document
+	// groupRef := firestoreClient.Collection("groups").Doc(GroupID)
+	// userDoc, err := groupRef.Get(ctx)
+	// if err != nil {
+	// 	log.Printf("error getting docsnapshot %v", err)
+	// 	return fmt.Errorf("error getting docsnapshot %v", err)
+	// }
+
+	// Check entry limit (max 5)
+	// contestData := userDoc.Data()
+	// totalEntries, totalEntriesExisit := contestData["total_entries"].(int64)
+
+	// if !totalEntriesExisit {
+	// 	log.Printf("total_entries field doesnt exist for groups id %s: %v", GroupID, err)
+	// 	return fmt.Errorf("total_entries field doesnt exist for groups id %s: %v", GroupID, err)
+	// }
+
+	// if totalEntries > 5 {
+	// 	log.Printf("Versus %s is full", GroupID)
+	// 	return fmt.Errorf("error groups no longer accepting entries %v", err)
+	// }
+
+	// Fetch track data
+	// trackData, err := getTrackData(ctx, trackID) 
+	// if err != nil {
+	// 	log.Printf("groups %s failed to find track %s for User %s ", GroupID, trackID, UserID)
+	// 	return fmt.Errorf("groups %s failed to find track %s for User %s ", GroupID, trackID, UserID)
+	// }
+	
+	// Fetch User name
+// 	UserRef := firestoreClient.Collection("users").Doc(UserID)
+// 	UserDoc, err :=  UserRef.Get(ctx)
+// 	if err != nil {
+// 		log.Printf("failed to fetch User data for User %s: %v", UserID, err)
+// 		return fmt.Errorf("failed to fetch User data for User %s: %v", UserID, err)
+// 	}
+	
+// 	UserData := UserDoc.Data()
+// 	UserName, UserNameExist := UserData["user_name"].(string)
+
+// 	if !UserNameExist {
+// 		log.Printf("Username not found for UserID: %s", UserID)
+// 		return fmt.Errorf("username not found for UserID: %s", UserID)
+// 	}
+
+
+// 	// Save the member
+// 	contestRef := firestoreClient.Collection("groups").Doc(GroupID).Collection("members").Doc(UserID)
+// 	GroupID = fmt.Sprintf("/groups/%s", GroupID)
+
+// 	// Use Set() to add the groups ID and timestamp
+// 	_, err = contestRef.Set(ctx, map[string]interface{}{
+// 		"user_id":			UserID,
+// 		"user_name":		UserName,
+// 	})
+
+// 	if err != nil {
+// 		log.Printf("failed to add member %s to groups %s: %v", UserID, GroupID, err)
+// 		return fmt.Errorf("failed to add member %s to groups %s: %v", UserID, GroupID, err)
+// 	}
+
+// 	log.Printf("Successfully added member %s to groups %s", UserID, GroupID)
+// 	return nil
+// }
+
