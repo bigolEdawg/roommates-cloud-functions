@@ -1,0 +1,6 @@
+data
+.firebaserc
+firebase.json
+firestore-debug.log
+.DS_Store
+TriggerAuthUser/.DS_Store
