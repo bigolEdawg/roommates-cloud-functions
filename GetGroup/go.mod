@@ -1,4 +1,4 @@
-module github.com/bigoledawg/roommates-cloud-functions/GetChore
+module github.com/bigoledawg/roommates-cloud-functions/GetGroup
 
 go 1.24.2
 
