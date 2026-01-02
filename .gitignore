@@ -3,4 +3,4 @@ data
 firebase.json
 firestore-debug.log
 .DS_Store
-TriggerAuthUser/.DS_Store
+**/.DS_Store
