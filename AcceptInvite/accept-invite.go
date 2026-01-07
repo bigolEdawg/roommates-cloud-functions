@@ -19,11 +19,11 @@ var firestoreClient *firestore.Client
 
 
 // users/invites/invite id
-func sendInvite(ctx context.Context, client *firestore.Client, uid string, data map[string]interface{}) error {
+func acceptInvite(ctx context.Context, client *firestore.Client, uid string, data map[string]interface{}) error {
 	// send an invite to the user
 
 	// get the doc ref for the user
-	userRef := client.Collection("users").Doc(uid).Collection("invites").NewDoc()
+	userRef := client.Collection("users").Doc(uid).Collection("invites")
 
 	_, err := userRef.Set(ctx, data)
 
@@ -34,7 +34,15 @@ func sendInvite(ctx context.Context, client *firestore.Client, uid string, data 
 	return nil
 }
 
-func InviteUserHandler(w http.ResponseWriter, r *http.Request) {
+func editGroup(ctx context.Context, client *firestore.Client, uid string) error{
+	
+	// groupRef()
+	
+	return nil
+}
+
+
+func AcceptInviteHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
 	var RequestBody struct {
@@ -83,7 +91,7 @@ func init() {
 	if err != nil {
 		log.Fatalf("Failed to initialize Firestore client: %v", err)
 	}	
-	functions.HTTP("InviteUserHandler", InviteUserHandler)
+	functions.HTTP("AcceptInviteHandler", AcceptInviteHandler)
 }
 
 
